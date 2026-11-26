@@ -6,7 +6,7 @@ from src.controllers.access import identity, reviewer
 from src.controllers.workbench import new_review
 from src.schemas.reviews import ReviewEntry, ReviewInput
 from src.schemas.runs import RunEntry
-from src.services import reviews, runs
+from src.services import receipts, reviews, runs
 from src.utils.serial import canonical_json
 
 router = APIRouter(prefix="/runs", tags=["Execution"])
@@ -38,11 +38,14 @@ def sign(run_id: int, form: ReviewInput, user=Depends(reviewer)):
 
 @router.get("/{run_id}/export", dependencies=[Depends(identity)])
 def export(run_id: int):
-    with engine.connect() as db:
+    # Registration, review and receipt evidence are read in one snapshot so the
+    # exported bundle is consistent with a single instant.
+    with engine.execution_options(isolation_level="REPEATABLE READ").begin() as db:
         run = runs.get(db, run_id)
         if run["status"] != JobState.DONE:
             raise HTTPException(409, "没有可导出的执行结果")
         run["review"] = reviews.get(db, run_id)
+        run["receipts"] = receipts.bundle(db, run_id)
     return Response(canonical_json(run), media_type="application/json", headers={
         "Content-Disposition": f"attachment; filename=evidence-{run_id}.json",
     })
